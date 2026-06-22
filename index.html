@@ -37,7 +37,8 @@
 
     /* kolor "nastroju" — zmienia się dynamicznie wraz z emocją */
     --nastroj:        #8b93a6;
-    --nastroj-slaby:  rgba(139,147,166,0.16);
+    --nastroj-slaby:  rgba(139,147,166,0.16);  /* delikatny — akcenty, poświata */
+    --nastroj-tlo:    rgba(139,147,166,0.30);  /* mocniejszy — zabarwienie tła */
   }
 
   *{ box-sizing:border-box; margin:0; padding:0; }
@@ -49,9 +50,12 @@
     background:var(--tlo);
     color:var(--tekst);
     min-height:100%;
-    /* poświata nastroju w tle — płynnie przechodzi przy zmianie emocji */
+    /* Zabarwienie tła kolorem dominującej emocji — wyraźna poświata u góry
+       i subtelniejsza u dołu. Płynnie przechodzi przy zmianie emocji. */
     background-image:
-      radial-gradient(120% 80% at 50% -10%, var(--nastroj-slaby), transparent 60%);
+      radial-gradient(140% 95% at 50% -15%, var(--nastroj-tlo),   transparent 55%),
+      radial-gradient(120% 80% at 50% 120%, var(--nastroj-slaby), transparent 60%);
+    background-attachment:fixed;
     transition:background-image .9s ease;
     -webkit-font-smoothing:antialiased;
   }
@@ -150,6 +154,38 @@
   .start-ekran .ikona{ font-size:46px; opacity:.85; }
   .start-ekran p{ color:var(--tekst-cichy); font-size:14px; max-width:280px; line-height:1.5; }
 
+  /* baner "trenera" — komunikaty odpocznij / uśmiechnij się */
+  .coach{
+    position:absolute; left:50%; top:16px;
+    transform:translateX(-50%) translateY(-8px);
+    max-width:84%; text-align:center;
+    background:rgba(13,15,20,0.82);
+    -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+    border:1px solid var(--linia); border-radius:14px;
+    padding:12px 18px;
+    opacity:0; pointer-events:none;
+    transition:opacity .4s ease, transform .4s ease;
+  }
+  .coach.pokaz{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .coach-tytul{ font-size:18px; font-weight:700; }
+  .coach-opis{ font-size:13px; color:var(--tekst-cichy); margin-top:3px; }
+
+  /* podgląd zrobionego zdjęcia */
+  .zdjecie-modal{
+    position:absolute; inset:0;
+    display:none; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px;
+    background:rgba(13,15,20,0.92);
+    -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
+    padding:18px; text-align:center;
+  }
+  .zdjecie-modal.pokaz{ display:flex; }
+  .zdjecie-modal img{
+    max-width:100%; max-height:68%;
+    border-radius:12px; border:1px solid var(--linia);
+  }
+  .zdjecie-przyciski{ display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+
   .btn{
     font-family:'Space Grotesk', sans-serif;
     font-size:15px; font-weight:600;
@@ -207,11 +243,12 @@
 
   /* lista wszystkich emocji z paskami */
   .lista{ display:flex; flex-direction:column; gap:13px; }
-  .emocja{ display:grid; grid-template-columns:108px 1fr 42px; align-items:center; gap:12px; }
+  .emocja{ display:grid; grid-template-columns:150px 1fr 42px; align-items:center; gap:12px; }
   .emocja .ikona-e{ font-size:16px; }
   .emocja .nazwa-e{
     font-size:14px; color:var(--tekst);
     display:flex; align-items:center; gap:8px;
+    white-space:nowrap;
   }
   .emocja .tor{
     height:8px; background:var(--panel-2);
@@ -242,18 +279,11 @@
   .info.pokaz{ display:block; }
   .info strong{ color:var(--tekst); }
 
-  /* ---------- WSKAŹNIKI ORIENTACYJNE (zmęczenie / nastrój) ---------- */
-  .wskazniki{
-    margin-top:22px; padding-top:20px;
-    border-top:1px solid var(--linia);
-  }
-  .wsk-naglowek{
-    font-size:11px; letter-spacing:0.12em; text-transform:uppercase;
-    color:var(--tekst-cichy); margin-bottom:14px;
-  }
-  .wskazniki .emocja{ margin-bottom:13px; }
+  /* ---------- NOTKA POD LISTĄ (zmęczenie/nastrój są już w liście wyżej) ---------- */
   .wsk-uwaga{
-    margin-top:14px; font-size:12px; line-height:1.5;
+    margin-top:18px; padding-top:16px;
+    border-top:1px solid var(--linia);
+    font-size:12px; line-height:1.5;
     color:var(--tekst-cichy);
   }
   .wsk-uwaga strong{ color:var(--tekst); }
@@ -292,6 +322,21 @@
           <div class="ikona">📷</div>
           <p>Włącz kamerę, ustaw twarz w kadrze i obserwuj rozpoznawane emocje na żywo.</p>
         </div>
+
+        <!-- baner "trenera": komunikaty odpocznij / uśmiechnij się -->
+        <div class="coach" id="coach">
+          <div class="coach-tytul" id="coach-tytul"></div>
+          <div class="coach-opis" id="coach-opis"></div>
+        </div>
+
+        <!-- podgląd zrobionego zdjęcia z możliwością zapisu -->
+        <div class="zdjecie-modal" id="zdjecie-modal">
+          <img id="zdjecie-podglad" alt="Twoje zdjęcie">
+          <div class="zdjecie-przyciski">
+            <button class="btn" id="btn-zapisz">Zapisz w galerii</button>
+            <button class="btn wtorny" id="btn-zamknij-zdjecie">Zamknij</button>
+          </div>
+        </div>
       </div>
 
       <div class="sterowanie">
@@ -311,29 +356,12 @@
         <div class="procent" id="dom-procent">—</div>
       </div>
 
-      <!-- lista pasków uzupełniana z JS -->
+      <!-- jedna wspólna lista: 7 emocji + zmęczenie + nastrój (budowana z JS) -->
       <div class="lista" id="lista"></div>
 
-      <!-- wskaźniki orientacyjne liczone z kilku sekund mimiki -->
-      <div class="wskazniki">
-        <div class="wsk-naglowek">Wskaźniki orientacyjne</div>
-
-        <div class="emocja">
-          <div class="nazwa-e"><span class="ikona-e">🥱</span>Zmęczenie</div>
-          <div class="tor"><div class="wypelnienie" id="wsk-zmeczenie-pasek" style="background:#e0a458"></div></div>
-          <div class="wartosc" id="wsk-zmeczenie-wartosc">—</div>
-        </div>
-
-        <div class="emocja">
-          <div class="nazwa-e"><span class="ikona-e">🌧️</span>Obniżony nastrój</div>
-          <div class="tor"><div class="wypelnienie" id="wsk-nastroj-pasek" style="background:#6b8cce"></div></div>
-          <div class="wartosc" id="wsk-nastroj-wartosc">—</div>
-        </div>
-
-        <div class="wsk-uwaga">
-          Wartości orientacyjne, uśredniane z ostatnich ~6 sekund mimiki.
-          <strong>To nie jest diagnoza medyczna</strong> — ocena samopoczucia czy depresji wymaga rozmowy z drugim człowiekiem lub specjalistą.
-        </div>
+      <div class="wsk-uwaga">
+        Zmęczenie i obniżony nastrój liczone są z ostatnich ~6 sekund mimiki (powieki, usta, brak uśmiechu).
+        <strong>To nie jest diagnoza medyczna</strong> — ocena samopoczucia czy depresji wymaga rozmowy z drugim człowiekiem lub specjalistą.
       </div>
 
       <!-- pole na komunikaty/błędy -->
@@ -411,6 +439,23 @@ KLUCZE.forEach(klucz => {
     pasek:    wiersz.querySelector('.wypelnienie'),
     wartosc:  wiersz.querySelector('.wartosc'),
   };
+});
+
+/* Dwa dodatkowe wiersze w TEJ SAMEJ liście: zmęczenie i obniżony nastrój.
+   Wyglądają jak emocje, ale liczone są inaczej — z kilku sekund mimiki
+   (patrz sekcja "WSKAŹNIKI ORIENTACYJNE" niżej). */
+const WSKAZNIKI = [
+  { klucz:'zmeczenie', pl:'Zmęczenie',        emoji:'🥱', kolor:'#e0a458' },
+  { klucz:'nastroj',   pl:'Obniżony nastrój', emoji:'🌧️', kolor:'#6b8cce' },
+];
+WSKAZNIKI.forEach(w => {
+  const wiersz = document.createElement('div');
+  wiersz.className = 'emocja';
+  wiersz.innerHTML = `
+    <div class="nazwa-e"><span class="ikona-e">${w.emoji}</span>${w.pl}</div>
+    <div class="tor"><div class="wypelnienie" id="wsk-${w.klucz}-pasek" style="background:${w.kolor}"></div></div>
+    <div class="wartosc" id="wsk-${w.klucz}-wartosc">—</div>`;
+  lista.appendChild(wiersz);
 });
 
 /* Pomocnicza funkcja: ustawia status w prawym górnym rogu */
@@ -519,6 +564,10 @@ function zatrzymaj(){
   zmGladkie = 0; nastrojGladkie = 0;
   ustawWskaznik('zmeczenie', null);
   ustawWskaznik('nastroj', null);
+  // reset "trenera" i ewentualnego podglądu zdjęcia
+  faza = 'idle';
+  schowajKomunikatCoach();
+  zdjModal.classList.remove('pokaz');
 }
 
 /* ============================================================
@@ -555,6 +604,7 @@ async function petlaAnalizy(){
     }
 
     aktualizujWskazniki();          // przeliczamy zmęczenie / nastrój z ostatnich sekund
+    sterujCoachingiem();            // komunikaty (odpocznij / uśmiechnij się) + zdjęcie
   }
 
   requestAnimationFrame(petlaAnalizy); // następna klatka
@@ -623,6 +673,7 @@ function ustawNastroj(kolor){
   const root = document.documentElement.style;
   root.setProperty('--nastroj', kolor);
   root.setProperty('--nastroj-slaby', hexNaRgba(kolor, 0.16));
+  root.setProperty('--nastroj-tlo',   hexNaRgba(kolor, 0.30)); // wyraźne zabarwienie tła
 }
 
 /* Zamiana koloru #RRGGBB na rgba(...) z podaną przezroczystością */
@@ -733,10 +784,122 @@ function ustawWskaznik(klucz, wartosc){
 }
 
 /* ============================================================
+   7) TRENER: komunikaty + zdjęcie z uśmiechem
+   Gdy zmęczenie utrzyma się wysoko → "Odpocznij, człowieku".
+   Po chwili → "Uśmiechnij się". Gdy wykryjemy uśmiech → pstryk
+   i podgląd zdjęcia z możliwością zapisania go w telefonie.
+   ============================================================ */
+const PROG_ZMECZENIA = 0.6;  // jak wysokie zmęczenie uruchamia komunikat (0–1). Obniż, żeby łatwiej przetestować.
+const PROG_USMIECHU  = 0.7;  // jak wyraźny uśmiech wyzwala zdjęcie (0–1)
+
+const coachBox   = document.getElementById('coach');
+const coachTytul = document.getElementById('coach-tytul');
+const coachOpis  = document.getElementById('coach-opis');
+const zdjModal   = document.getElementById('zdjecie-modal');
+const zdjPodglad = document.getElementById('zdjecie-podglad');
+
+let faza = 'idle';          // 'idle' → 'odpocznij' → 'usmiech' → 'gotowe'
+let fazaOd = 0;             // kiedy weszliśmy w bieżącą fazę
+let coachingDoCzasu = 0;    // do tego czasu nie zaczepiamy ponownie (cooldown)
+let ostatnieZdjecieBlob = null;
+
+/* Pokazuje / chowa baner trenera */
+function pokazKomunikatCoach(tytul, opis){
+  coachTytul.textContent = tytul;
+  coachOpis.textContent  = opis;
+  coachBox.classList.add('pokaz');
+}
+function schowajKomunikatCoach(){
+  coachBox.classList.remove('pokaz');
+}
+
+/* Mała maszyna stanów sterująca komunikatami i zdjęciem */
+function sterujCoachingiem(){
+  const teraz = performance.now();
+
+  if (faza === 'idle'){
+    // czekamy aż zmęczenie przekroczy próg (i minie ewentualny cooldown)
+    if (teraz > coachingDoCzasu && zmGladkie > PROG_ZMECZENIA){
+      faza = 'odpocznij'; fazaOd = teraz;
+      pokazKomunikatCoach('🥱 Odpocznij, człowieku', 'Wyglądasz na zmęczonego — daj sobie chwilę przerwy.');
+    }
+  }
+  else if (faza === 'odpocznij'){
+    // po ~5 sekundach zachęcamy do uśmiechu
+    if (teraz - fazaOd > 5000){
+      faza = 'usmiech'; fazaOd = teraz;
+      pokazKomunikatCoach('😊 Uśmiechnij się', 'Uśmiechnij się do kamery, a zrobię Ci zdjęcie.');
+    }
+  }
+  else if (faza === 'usmiech'){
+    if (wygladzone.happy > PROG_USMIECHU){
+      // mamy uśmiech → pstryk!
+      faza = 'gotowe';
+      schowajKomunikatCoach();
+      zrobZdjecie();
+      coachingDoCzasu = teraz + 90000; // nie zaczepiaj znów przez 90 s
+    } else if (teraz - fazaOd > 20000){
+      // nie doczekaliśmy się uśmiechu — odpuszczamy
+      faza = 'idle';
+      schowajKomunikatCoach();
+      coachingDoCzasu = teraz + 60000;
+    }
+  }
+  // 'gotowe' → czekamy aż użytkownik zamknie podgląd zdjęcia (przycisk)
+}
+
+/* Robi zdjęcie z bieżącej klatki (lustrzane, jak podgląd) */
+function zrobZdjecie(){
+  const c = document.createElement('canvas');
+  c.width  = wideo.videoWidth;
+  c.height = wideo.videoHeight;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width, 0);
+  ctx.scale(-1, 1);                 // odbicie lustrzane — żeby zdjęcie wyglądało jak w podglądzie
+  ctx.drawImage(wideo, 0, 0, c.width, c.height);
+
+  c.toBlob(blob => {
+    ostatnieZdjecieBlob = blob;
+    zdjPodglad.src = URL.createObjectURL(blob);
+    zdjModal.classList.add('pokaz');
+  }, 'image/jpeg', 0.92);
+}
+
+/* Zapisuje zdjęcie. Na telefonie otwiera natywne "Udostępnij / Zapisz w galerii",
+   a gdy to niedostępne — pobiera plik (trafia do Pobrane / Galerii). */
+async function zapiszZdjecie(){
+  if (!ostatnieZdjecieBlob) return;
+  const nazwa = 'usmiech-' + Date.now() + '.jpg';
+  const plik  = new File([ostatnieZdjecieBlob], nazwa, { type:'image/jpeg' });
+
+  // najlepsza droga na telefonie: natywny arkusz udostępniania z opcją zapisu w galerii
+  if (navigator.canShare && navigator.canShare({ files:[plik] })){
+    try {
+      await navigator.share({ files:[plik], title:'Twój uśmiech' });
+      return;
+    } catch(e){ /* użytkownik anulował lub błąd — spróbujemy pobrać poniżej */ }
+  }
+  // zapas: zwykłe pobranie pliku
+  const url = URL.createObjectURL(ostatnieZdjecieBlob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nazwa;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* Zamyka podgląd zdjęcia i wraca do normalnego trybu */
+function zamknijZdjecie(){
+  zdjModal.classList.remove('pokaz');
+  faza = 'idle';
+}
+
+/* ============================================================
    PODŁĄCZENIE PRZYCISKÓW
    ============================================================ */
 btnStart.addEventListener('click', wlaczKamere);
 btnStop.addEventListener('click', zatrzymaj);
+document.getElementById('btn-zapisz').addEventListener('click', zapiszZdjecie);
+document.getElementById('btn-zamknij-zdjecie').addEventListener('click', zamknijZdjecie);
 </script>
 </body>
 </html>
