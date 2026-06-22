@@ -1,0 +1,594 @@
+<!--
+  ============================================================
+  CZUJNIK EMOCJI — rozpoznawanie emocji z kamery
+  ============================================================
+  Jak to działa (w skrócie):
+  1. Prosimy przeglądarkę o dostęp do kamery (getUserMedia).
+  2. Ładujemy gotowe modele AI z biblioteki face-api.js.
+  3. W pętli kilka razy na sekundę analizujemy klatkę obrazu,
+     wykrywamy twarz i szacujemy prawdopodobieństwo 7 emocji.
+  4. Wyniki wygładzamy (żeby nie migotały) i pokazujemy na ekranie.
+
+  Wszystko dzieje się LOKALNIE w Twojej przeglądarce — obraz
+  z kamery NIE jest nigdzie wysyłany.
+  ============================================================
+-->
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Czujnik Emocji</title>
+
+<!-- Czcionki: Space Grotesk (nagłówki) + JetBrains Mono (liczby) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+  /* ---------- ZMIENNE / KOLORY ---------- */
+  :root{
+    --tlo:        #0d0f14;   /* prawie czarne tło */
+    --panel:      #161922;   /* ciemny panel */
+    --panel-2:    #1d2230;   /* jaśniejszy element */
+    --linia:      #2a2f3d;   /* delikatne obramowania */
+    --tekst:      #eef1f7;   /* główny tekst */
+    --tekst-cichy:#8b93a6;   /* drugorzędny tekst */
+
+    /* kolor "nastroju" — zmienia się dynamicznie wraz z emocją */
+    --nastroj:        #8b93a6;
+    --nastroj-slaby:  rgba(139,147,166,0.16);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{ height:100%; }
+
+  body{
+    font-family:'Space Grotesk', system-ui, sans-serif;
+    background:var(--tlo);
+    color:var(--tekst);
+    min-height:100%;
+    /* poświata nastroju w tle — płynnie przechodzi przy zmianie emocji */
+    background-image:
+      radial-gradient(120% 80% at 50% -10%, var(--nastroj-slaby), transparent 60%);
+    transition:background-image .9s ease;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .wrap{
+    max-width:1080px;
+    margin:0 auto;
+    padding:28px 20px 64px;
+  }
+
+  /* ---------- NAGŁÓWEK ---------- */
+  header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    flex-wrap:wrap;
+    margin-bottom:26px;
+  }
+  .marka{ display:flex; align-items:baseline; gap:12px; }
+  .marka h1{
+    font-size:clamp(22px, 3.4vw, 30px);
+    font-weight:700;
+    letter-spacing:-0.02em;
+  }
+  .marka .kropka{
+    width:10px; height:10px; border-radius:50%;
+    background:var(--nastroj);
+    box-shadow:0 0 16px var(--nastroj);
+    transition:background .6s ease, box-shadow .6s ease;
+    align-self:center;
+  }
+  .marka span.podpis{
+    font-size:13px; color:var(--tekst-cichy);
+    letter-spacing:0.04em; text-transform:uppercase;
+  }
+
+  /* etykieta statusu (czeka / ładuje / działa / błąd) */
+  .status{
+    font-family:'JetBrains Mono', monospace;
+    font-size:12px;
+    color:var(--tekst-cichy);
+    border:1px solid var(--linia);
+    background:var(--panel);
+    padding:7px 13px;
+    border-radius:999px;
+    display:inline-flex; align-items:center; gap:8px;
+    white-space:nowrap;
+  }
+  .status .led{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--tekst-cichy);
+  }
+  .status.dziala .led{ background:#46d39a; box-shadow:0 0 10px #46d39a; }
+  .status.laduje  .led{ background:#ffc857; animation:puls 1s infinite; }
+  .status.blad    .led{ background:#e5484d; }
+  @keyframes puls{ 50%{ opacity:.25; } }
+
+  /* ---------- UKŁAD GŁÓWNY ---------- */
+  .panel-glowny{
+    display:grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap:22px;
+    align-items:start;
+  }
+  /* na telefonie układamy jeden pod drugim */
+  @media (max-width:760px){
+    .panel-glowny{ grid-template-columns:1fr; }
+  }
+
+  /* ---------- OBRAZ Z KAMERY ---------- */
+  .kamera-box{
+    position:relative;
+    width:100%;
+    aspect-ratio:4/3;
+    background:var(--panel);
+    border:1px solid var(--linia);
+    border-radius:18px;
+    overflow:hidden;
+  }
+  /* lustrzane odbicie — bardziej naturalne jak w selfie */
+  #wideo, #nakladka{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    transform:scaleX(-1);
+  }
+  #wideo{ object-fit:cover; }
+
+  /* ekran startowy, gdy kamera wyłączona */
+  .start-ekran{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    gap:18px; text-align:center; padding:24px;
+  }
+  .start-ekran .ikona{ font-size:46px; opacity:.85; }
+  .start-ekran p{ color:var(--tekst-cichy); font-size:14px; max-width:280px; line-height:1.5; }
+
+  .btn{
+    font-family:'Space Grotesk', sans-serif;
+    font-size:15px; font-weight:600;
+    color:#0d0f14;
+    background:var(--tekst);
+    border:none; border-radius:12px;
+    padding:13px 22px;
+    cursor:pointer;
+    transition:transform .15s ease, opacity .2s ease;
+  }
+  .btn:hover{ transform:translateY(-1px); }
+  .btn:active{ transform:translateY(0); }
+  .btn:disabled{ opacity:.45; cursor:default; transform:none; }
+  .btn.wtorny{
+    background:transparent; color:var(--tekst);
+    border:1px solid var(--linia);
+  }
+
+  .sterowanie{
+    display:flex; gap:12px; margin-top:16px; flex-wrap:wrap;
+  }
+
+  /* ---------- PANEL ODCZYTU ---------- */
+  .odczyt{
+    background:var(--panel);
+    border:1px solid var(--linia);
+    border-radius:18px;
+    padding:22px;
+  }
+
+  /* duży odczyt dominującej emocji */
+  .dominujaca{
+    display:flex; align-items:center; gap:16px;
+    padding-bottom:20px; margin-bottom:20px;
+    border-bottom:1px solid var(--linia);
+  }
+  .dominujaca .emoji{
+    font-size:52px; line-height:1;
+    filter:drop-shadow(0 0 18px var(--nastroj-slaby));
+  }
+  .dominujaca .opis{ flex:1; }
+  .dominujaca .label-mala{
+    font-size:11px; letter-spacing:0.12em; text-transform:uppercase;
+    color:var(--tekst-cichy); margin-bottom:4px;
+  }
+  .dominujaca .nazwa{
+    font-size:26px; font-weight:700; letter-spacing:-0.01em;
+    color:var(--nastroj); transition:color .5s ease;
+  }
+  .dominujaca .procent{
+    font-family:'JetBrains Mono', monospace;
+    font-size:34px; font-weight:700;
+    color:var(--nastroj); transition:color .5s ease;
+  }
+
+  /* lista wszystkich emocji z paskami */
+  .lista{ display:flex; flex-direction:column; gap:13px; }
+  .emocja{ display:grid; grid-template-columns:108px 1fr 42px; align-items:center; gap:12px; }
+  .emocja .ikona-e{ font-size:16px; }
+  .emocja .nazwa-e{
+    font-size:14px; color:var(--tekst);
+    display:flex; align-items:center; gap:8px;
+  }
+  .emocja .tor{
+    height:8px; background:var(--panel-2);
+    border-radius:999px; overflow:hidden;
+  }
+  .emocja .wypelnienie{
+    height:100%; width:0%;
+    border-radius:999px;
+    transition:width .25s ease, background .25s ease;
+  }
+  .emocja .wartosc{
+    font-family:'JetBrains Mono', monospace;
+    font-size:13px; color:var(--tekst-cichy);
+    text-align:right;
+  }
+
+  /* komunikat o błędzie / podpowiedź */
+  .info{
+    margin-top:18px;
+    font-size:13px; line-height:1.55;
+    color:var(--tekst-cichy);
+    background:var(--panel-2);
+    border:1px solid var(--linia);
+    border-radius:12px;
+    padding:14px 16px;
+    display:none;            /* pokazujemy tylko gdy trzeba */
+  }
+  .info.pokaz{ display:block; }
+  .info strong{ color:var(--tekst); }
+
+  footer{
+    margin-top:34px; text-align:center;
+    font-size:12px; color:var(--tekst-cichy);
+    line-height:1.6;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ====== NAGŁÓWEK ====== -->
+  <header>
+    <div class="marka">
+      <span class="kropka"></span>
+      <h1>Czujnik Emocji</h1>
+      <span class="podpis">analiza mimiki na żywo</span>
+    </div>
+    <div class="status" id="status"><span class="led"></span><span id="status-tekst">Kamera wyłączona</span></div>
+  </header>
+
+  <!-- ====== UKŁAD GŁÓWNY ====== -->
+  <div class="panel-glowny">
+
+    <!-- LEWA: obraz z kamery -->
+    <div>
+      <div class="kamera-box">
+        <video id="wideo" autoplay muted playsinline></video>
+        <canvas id="nakladka"></canvas>
+
+        <!-- ekran startowy (znika po włączeniu kamery) -->
+        <div class="start-ekran" id="start-ekran">
+          <div class="ikona">📷</div>
+          <p>Włącz kamerę, ustaw twarz w kadrze i obserwuj rozpoznawane emocje na żywo.</p>
+        </div>
+      </div>
+
+      <div class="sterowanie">
+        <button class="btn" id="btn-start">Włącz kamerę</button>
+        <button class="btn wtorny" id="btn-stop" disabled>Zatrzymaj</button>
+      </div>
+    </div>
+
+    <!-- PRAWA: odczyt emocji -->
+    <div class="odczyt">
+      <div class="dominujaca">
+        <div class="emoji" id="dom-emoji">🙂</div>
+        <div class="opis">
+          <div class="label-mala">Dominująca emocja</div>
+          <div class="nazwa" id="dom-nazwa">—</div>
+        </div>
+        <div class="procent" id="dom-procent">—</div>
+      </div>
+
+      <!-- lista pasków uzupełniana z JS -->
+      <div class="lista" id="lista"></div>
+
+      <!-- pole na komunikaty/błędy -->
+      <div class="info" id="info"></div>
+    </div>
+  </div>
+
+  <footer>
+    Obraz analizowany jest wyłącznie w Twojej przeglądarce — nic nie jest wysyłane na żaden serwer.<br>
+    Modele AI: face-api.js (TinyFaceDetector + FaceExpressionNet).
+  </footer>
+</div>
+
+<!-- Biblioteka rozpoznawania twarzy (wersja utrzymywana @vladmandic) -->
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+
+<script>
+/* ============================================================
+   KONFIGURACJA EMOCJI
+   Tu możesz zmieniać polskie nazwy, emoji i kolory każdej emocji.
+   Klucze (happy, sad, ...) muszą zostać — to nazwy z modelu AI.
+   ============================================================ */
+const EMOCJE = {
+  neutral:   { pl:'Neutralność', emoji:'😐', kolor:'#8b93a6' },
+  happy:     { pl:'Radość',      emoji:'😊', kolor:'#ffc857' },
+  sad:       { pl:'Smutek',      emoji:'😢', kolor:'#5b8def' },
+  angry:     { pl:'Złość',       emoji:'😠', kolor:'#e5484d' },
+  fearful:   { pl:'Strach',      emoji:'😨', kolor:'#8b5cf6' },
+  disgusted: { pl:'Obrzydzenie', emoji:'🤢', kolor:'#46a758' },
+  surprised: { pl:'Zaskoczenie', emoji:'😲', kolor:'#5ee6d0' },
+};
+const KLUCZE = Object.keys(EMOCJE); // stała kolejność pasków
+
+// Adres, z którego ładują się pliki modeli AI
+const MODELE_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+
+/* ============================================================
+   ELEMENTY STRONY
+   ============================================================ */
+const wideo       = document.getElementById('wideo');
+const nakladka    = document.getElementById('nakladka');
+const startEkran  = document.getElementById('start-ekran');
+const btnStart    = document.getElementById('btn-start');
+const btnStop     = document.getElementById('btn-stop');
+const lista       = document.getElementById('lista');
+const info        = document.getElementById('info');
+const statusBox   = document.getElementById('status');
+const statusTekst = document.getElementById('status-tekst');
+const domEmoji    = document.getElementById('dom-emoji');
+const domNazwa    = document.getElementById('dom-nazwa');
+const domProcent  = document.getElementById('dom-procent');
+
+/* ============================================================
+   STAN APLIKACJI
+   ============================================================ */
+let modeleZaladowane = false;  // czy modele AI już wczytane
+let dziala = false;            // czy pętla analizy działa
+let strumien = null;           // strumień z kamery (do wyłączenia)
+let wygladzone = {};           // wygładzone wartości emocji
+KLUCZE.forEach(k => wygladzone[k] = 0);
+
+/* Budujemy listę pasków emocji raz, na starcie */
+const wierszeEmocji = {};
+KLUCZE.forEach(klucz => {
+  const e = EMOCJE[klucz];
+  const wiersz = document.createElement('div');
+  wiersz.className = 'emocja';
+  wiersz.innerHTML = `
+    <div class="nazwa-e"><span class="ikona-e">${e.emoji}</span>${e.pl}</div>
+    <div class="tor"><div class="wypelnienie" style="background:${e.kolor}"></div></div>
+    <div class="wartosc">0%</div>`;
+  lista.appendChild(wiersz);
+  // zapamiętujemy referencje, żeby szybko aktualizować
+  wierszeEmocji[klucz] = {
+    pasek:    wiersz.querySelector('.wypelnienie'),
+    wartosc:  wiersz.querySelector('.wartosc'),
+  };
+});
+
+/* Pomocnicza funkcja: ustawia status w prawym górnym rogu */
+function ustawStatus(tekst, typ){
+  statusTekst.textContent = tekst;
+  statusBox.className = 'status' + (typ ? ' ' + typ : '');
+}
+
+/* Pomocnicza funkcja: pokazuje komunikat w panelu */
+function pokazInfo(html){
+  info.innerHTML = html;
+  info.classList.add('pokaz');
+}
+
+/* ============================================================
+   1) ŁADOWANIE MODELI AI
+   ============================================================ */
+async function zaladujModele(){
+  if (modeleZaladowane) return;
+  ustawStatus('Ładowanie modeli…', 'laduje');
+  // sprawdzamy, czy biblioteka w ogóle się wczytała
+  if (typeof faceapi === 'undefined'){
+    throw new Error('BIBLIOTEKA');
+  }
+  // detektor twarzy + sieć rozpoznająca emocje
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODELE_URL);
+  await faceapi.nets.faceExpressionNet.loadFromUri(MODELE_URL);
+  modeleZaladowane = true;
+}
+
+/* ============================================================
+   2) WŁĄCZENIE KAMERY
+   ============================================================ */
+async function wlaczKamere(){
+  btnStart.disabled = true;
+  info.classList.remove('pokaz');
+
+  try {
+    // najpierw modele (jednorazowo)
+    await zaladujModele();
+
+    // prosimy o kamerę (przednia, jeśli dostępna)
+    ustawStatus('Proszę o dostęp do kamery…', 'laduje');
+    strumien = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user' },
+      audio: false
+    });
+    wideo.srcObject = strumien;
+    await wideo.play();
+
+    // dopasowujemy rozmiar nakładki (canvas) do obrazu z kamery
+    nakladka.width  = wideo.videoWidth;
+    nakladka.height = wideo.videoHeight;
+
+    startEkran.style.display = 'none';
+    btnStop.disabled = false;
+    dziala = true;
+    ustawStatus('Analiza na żywo', 'dziala');
+
+    petlaAnalizy(); // start pętli rozpoznawania
+
+  } catch (err) {
+    console.error(err);
+    obsluzBlad(err);
+    btnStart.disabled = false;
+    ustawStatus('Błąd', 'blad');
+  }
+}
+
+/* Tłumaczymy techniczne błędy na zrozumiałe komunikaty */
+function obsluzBlad(err){
+  if (err.message === 'BIBLIOTEKA' || err.message?.includes('Cannot read') ){
+    pokazInfo(`<strong>Nie udało się wczytać modeli AI.</strong> Najczęstsza przyczyna:
+      ta strona jest otwarta bezpośrednio z pliku, a podgląd blokuje pobieranie danych.
+      Rozwiązanie: umieść plik na darmowym hostingu (np. przeciągnij go na
+      <strong>netlify.app/drop</strong>) lub uruchom przez lokalny serwer.`);
+  } else if (err.name === 'NotAllowedError'){
+    pokazInfo(`<strong>Brak dostępu do kamery.</strong> Zgoda została odrzucona.
+      Kliknij ikonę kłódki w pasku adresu i zezwól na dostęp do kamery, a potem spróbuj ponownie.`);
+  } else if (err.name === 'NotFoundError'){
+    pokazInfo(`<strong>Nie znaleziono kamery.</strong> Sprawdź, czy urządzenie ma działającą kamerę
+      i czy nie jest używana przez inny program.`);
+  } else {
+    pokazInfo(`<strong>Coś poszło nie tak.</strong> ${err.message || err.name}.
+      Pamiętaj, że kamera działa tylko na stronach z adresem <strong>https://</strong>
+      (albo na localhost).`);
+  }
+}
+
+/* ============================================================
+   3) ZATRZYMANIE
+   ============================================================ */
+function zatrzymaj(){
+  dziala = false;
+  if (strumien){ strumien.getTracks().forEach(t => t.stop()); strumien = null; }
+  wideo.srcObject = null;
+  startEkran.style.display = 'flex';
+  btnStop.disabled = true;
+  btnStart.disabled = false;
+  ustawStatus('Zatrzymano', '');
+  // czyścimy nakładkę
+  nakladka.getContext('2d').clearRect(0,0,nakladka.width,nakladka.height);
+}
+
+/* ============================================================
+   4) PĘTLA ANALIZY — serce aplikacji
+   ============================================================ */
+let ostatniaAnaliza = 0;
+const ODSTEP_MS = 140; // co ile milisekund analizować klatkę (niżej = płynniej, ale ciężej)
+
+async function petlaAnalizy(){
+  if (!dziala) return;
+  const teraz = performance.now();
+
+  if (teraz - ostatniaAnaliza > ODSTEP_MS){
+    ostatniaAnaliza = teraz;
+
+    // wykryj twarze i oszacuj emocje
+    const wyniki = await faceapi
+      .detectAllFaces(wideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.45 }))
+      .withFaceExpressions();
+
+    rysujRamki(wyniki);
+
+    if (wyniki.length > 0){
+      // bierzemy największą twarz (najbliżej kamery) do głównego odczytu
+      const glowna = wyniki.reduce((a,b) =>
+        (a.detection.box.area > b.detection.box.area) ? a : b);
+      aktualizujOdczyt(glowna.expressions);
+    } else {
+      // brak twarzy → wygaszamy wartości
+      KLUCZE.forEach(k => wygladzone[k] *= 0.85);
+      aktualizujOdczyt(null);
+    }
+  }
+
+  requestAnimationFrame(petlaAnalizy); // następna klatka
+}
+
+/* Rysuje prostokąty wokół wykrytych twarzy */
+function rysujRamki(wyniki){
+  const ctx = nakladka.getContext('2d');
+  ctx.clearRect(0,0,nakladka.width,nakladka.height);
+  ctx.strokeStyle = getComputedStyle(document.documentElement)
+                      .getPropertyValue('--nastroj').trim() || '#fff';
+  ctx.lineWidth = 3;
+  wyniki.forEach(w => {
+    const b = w.detection.box;
+    // delikatnie zaokrąglona ramka
+    ctx.beginPath();
+    ctx.roundRect(b.x, b.y, b.width, b.height, 12);
+    ctx.stroke();
+  });
+}
+
+/* ============================================================
+   5) AKTUALIZACJA ODCZYTU (z wygładzaniem)
+   ============================================================ */
+function aktualizujOdczyt(emocje){
+  // Wygładzanie: nowy wynik miesza się ze starym (średnia ważona),
+  // dzięki czemu paski nie skaczą nerwowo.
+  const SILA = 0.35; // 0 = bez zmian, 1 = bez wygładzania
+  if (emocje){
+    KLUCZE.forEach(k => {
+      const cel = emocje[k] ?? 0;
+      wygladzone[k] = wygladzone[k] * (1 - SILA) + cel * SILA;
+    });
+  }
+
+  // aktualizujemy paski
+  KLUCZE.forEach(k => {
+    const proc = Math.round(wygladzone[k] * 100);
+    wierszeEmocji[k].pasek.style.width = proc + '%';
+    wierszeEmocji[k].wartosc.textContent = proc + '%';
+  });
+
+  // wyznaczamy dominującą emocję
+  let dom = KLUCZE[0];
+  KLUCZE.forEach(k => { if (wygladzone[k] > wygladzone[dom]) dom = k; });
+  const procDom = Math.round(wygladzone[dom] * 100);
+  const e = EMOCJE[dom];
+
+  // jeśli żadna emocja nie jest pewna (np. brak twarzy) — stan neutralny
+  if (procDom < 8){
+    domEmoji.textContent = '🙂';
+    domNazwa.textContent = 'Szukam twarzy…';
+    domProcent.textContent = '—';
+    ustawNastroj('#8b93a6');
+    return;
+  }
+
+  domEmoji.textContent  = e.emoji;
+  domNazwa.textContent  = e.pl;
+  domProcent.textContent = procDom + '%';
+  ustawNastroj(e.kolor); // zabarwiamy interfejs kolorem emocji
+}
+
+/* Ustawia kolor "nastroju" — wpływa na tło, kropkę, akcenty */
+function ustawNastroj(kolor){
+  const root = document.documentElement.style;
+  root.setProperty('--nastroj', kolor);
+  root.setProperty('--nastroj-slaby', hexNaRgba(kolor, 0.16));
+}
+
+/* Zamiana koloru #RRGGBB na rgba(...) z podaną przezroczystością */
+function hexNaRgba(hex, alpha){
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* ============================================================
+   PODŁĄCZENIE PRZYCISKÓW
+   ============================================================ */
+btnStart.addEventListener('click', wlaczKamere);
+btnStop.addEventListener('click', zatrzymaj);
+</script>
+</body>
+</html>
