@@ -18,7 +18,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Czujnik Emocji</title>
+<title>Twoje emocje</title>
 
 <!-- Czcionki: Space Grotesk (nagłówki) + JetBrains Mono (liczby) -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -242,6 +242,22 @@
   .info.pokaz{ display:block; }
   .info strong{ color:var(--tekst); }
 
+  /* ---------- WSKAŹNIKI ORIENTACYJNE (zmęczenie / nastrój) ---------- */
+  .wskazniki{
+    margin-top:22px; padding-top:20px;
+    border-top:1px solid var(--linia);
+  }
+  .wsk-naglowek{
+    font-size:11px; letter-spacing:0.12em; text-transform:uppercase;
+    color:var(--tekst-cichy); margin-bottom:14px;
+  }
+  .wskazniki .emocja{ margin-bottom:13px; }
+  .wsk-uwaga{
+    margin-top:14px; font-size:12px; line-height:1.5;
+    color:var(--tekst-cichy);
+  }
+  .wsk-uwaga strong{ color:var(--tekst); }
+
   footer{
     margin-top:34px; text-align:center;
     font-size:12px; color:var(--tekst-cichy);
@@ -256,7 +272,7 @@
   <header>
     <div class="marka">
       <span class="kropka"></span>
-      <h1>Czujnik Emocji</h1>
+      <h1>Twoje emocje</h1>
       <span class="podpis">analiza mimiki na żywo</span>
     </div>
     <div class="status" id="status"><span class="led"></span><span id="status-tekst">Kamera wyłączona</span></div>
@@ -297,6 +313,28 @@
 
       <!-- lista pasków uzupełniana z JS -->
       <div class="lista" id="lista"></div>
+
+      <!-- wskaźniki orientacyjne liczone z kilku sekund mimiki -->
+      <div class="wskazniki">
+        <div class="wsk-naglowek">Wskaźniki orientacyjne</div>
+
+        <div class="emocja">
+          <div class="nazwa-e"><span class="ikona-e">🥱</span>Zmęczenie</div>
+          <div class="tor"><div class="wypelnienie" id="wsk-zmeczenie-pasek" style="background:#e0a458"></div></div>
+          <div class="wartosc" id="wsk-zmeczenie-wartosc">—</div>
+        </div>
+
+        <div class="emocja">
+          <div class="nazwa-e"><span class="ikona-e">🌧️</span>Obniżony nastrój</div>
+          <div class="tor"><div class="wypelnienie" id="wsk-nastroj-pasek" style="background:#6b8cce"></div></div>
+          <div class="wartosc" id="wsk-nastroj-wartosc">—</div>
+        </div>
+
+        <div class="wsk-uwaga">
+          Wartości orientacyjne, uśredniane z ostatnich ~6 sekund mimiki.
+          <strong>To nie jest diagnoza medyczna</strong> — ocena samopoczucia czy depresji wymaga rozmowy z drugim człowiekiem lub specjalistą.
+        </div>
+      </div>
 
       <!-- pole na komunikaty/błędy -->
       <div class="info" id="info"></div>
@@ -397,8 +435,9 @@ async function zaladujModele(){
   if (typeof faceapi === 'undefined'){
     throw new Error('BIBLIOTEKA');
   }
-  // detektor twarzy + sieć rozpoznająca emocje
+  // detektor twarzy + punkty twarzy (oczy/usta) + sieć rozpoznająca emocje
   await faceapi.nets.tinyFaceDetector.loadFromUri(MODELE_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODELE_URL); // punkty twarzy — potrzebne do wskaźnika zmęczenia
   await faceapi.nets.faceExpressionNet.loadFromUri(MODELE_URL);
   modeleZaladowane = true;
 }
@@ -475,6 +514,11 @@ function zatrzymaj(){
   ustawStatus('Zatrzymano', '');
   // czyścimy nakładkę
   nakladka.getContext('2d').clearRect(0,0,nakladka.width,nakladka.height);
+  // czyścimy wskaźniki czasowe
+  probki = [];
+  zmGladkie = 0; nastrojGladkie = 0;
+  ustawWskaznik('zmeczenie', null);
+  ustawWskaznik('nastroj', null);
 }
 
 /* ============================================================
@@ -493,6 +537,7 @@ async function petlaAnalizy(){
     // wykryj twarze i oszacuj emocje
     const wyniki = await faceapi
       .detectAllFaces(wideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.45 }))
+      .withFaceLandmarks()
       .withFaceExpressions();
 
     rysujRamki(wyniki);
@@ -502,11 +547,14 @@ async function petlaAnalizy(){
       const glowna = wyniki.reduce((a,b) =>
         (a.detection.box.area > b.detection.box.area) ? a : b);
       aktualizujOdczyt(glowna.expressions);
+      dodajProbke(glowna);          // zapamiętujemy próbkę do wskaźników czasowych
     } else {
       // brak twarzy → wygaszamy wartości
       KLUCZE.forEach(k => wygladzone[k] *= 0.85);
       aktualizujOdczyt(null);
     }
+
+    aktualizujWskazniki();          // przeliczamy zmęczenie / nastrój z ostatnich sekund
   }
 
   requestAnimationFrame(petlaAnalizy); // następna klatka
@@ -582,6 +630,106 @@ function hexNaRgba(hex, alpha){
   const n = parseInt(hex.slice(1), 16);
   const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* ============================================================
+   6) WSKAŹNIKI ORIENTACYJNE: zmęczenie i obniżony nastrój
+   Liczone NIE z jednej klatki, lecz z ostatnich ~6 sekund —
+   pojedyncze mrugnięcie czy grymas nie ma znaczenia, liczy się
+   to, co utrzymuje się dłużej.
+   ============================================================ */
+const OKNO_MS       = 6000;  // długość okna uśredniania (~6 s)
+const PROG_OKO      = 0.21;  // EAR poniżej tej wartości = oko przymknięte (próg informacyjny)
+const PROG_ZIEWANIE = 0.60;  // MAR powyżej tej wartości = usta szeroko otwarte (ziewanie)
+
+let probki = [];                       // bufor próbek: [{czas, ear, mar, happy, sad}]
+let zmGladkie = 0, nastrojGladkie = 0; // dogładzone wartości do wyświetlenia
+
+/* Odległość między dwoma punktami twarzy */
+function odleglosc(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+
+/* EAR (Eye Aspect Ratio) — stosunek wysokości oka do szerokości.
+   Im mniejszy, tym bardziej oko jest przymknięte (objaw senności). */
+function liczEAR(oko){
+  const a = odleglosc(oko[1], oko[5]);
+  const b = odleglosc(oko[2], oko[4]);
+  const c = odleglosc(oko[0], oko[3]);
+  return (a + b) / (2 * c);
+}
+
+/* MAR (Mouth Aspect Ratio) — otwarcie ust w pionie względem szerokości.
+   Duża wartość = usta szeroko otwarte (np. ziewanie). */
+function liczMAR(usta){
+  const pion   = odleglosc(usta[3], usta[9]);  // środek górnej i dolnej wargi
+  const poziom = odleglosc(usta[0], usta[6]);  // kąciki ust
+  return pion / poziom;
+}
+
+/* Zapisuje jedną próbkę z aktualnej twarzy do bufora */
+function dodajProbke(twarz){
+  const l = twarz.landmarks;
+  const ear = (liczEAR(l.getLeftEye()) + liczEAR(l.getRightEye())) / 2;
+  const mar = liczMAR(l.getMouth());
+  probki.push({
+    czas:  performance.now(),
+    ear, mar,
+    happy: twarz.expressions.happy ?? 0,
+    sad:   twarz.expressions.sad   ?? 0,
+  });
+}
+
+/* Główne przeliczenie wskaźników z bufora */
+function aktualizujWskazniki(){
+  const teraz = performance.now();
+  // wyrzucamy próbki starsze niż okno
+  probki = probki.filter(p => teraz - p.czas < OKNO_MS);
+
+  // za mało danych (np. dopiero co włączono kamerę) — czekamy
+  if (probki.length < 8){
+    ustawWskaznik('zmeczenie', null);
+    ustawWskaznik('nastroj', null);
+    return;
+  }
+
+  // średnie z okna
+  const sr = (pole) => probki.reduce((s, p) => s + p[pole], 0) / probki.length;
+  const srEar   = sr('ear');
+  const srHappy = sr('happy');
+  const srSad   = sr('sad');
+  const udzialZiewania = probki.filter(p => p.mar > PROG_ZIEWANIE).length / probki.length;
+
+  // ZMĘCZENIE: głównie z opadających powiek (niski EAR) + ziewania.
+  // EAR ~0.30 = oczy szeroko otwarte, ~0.15 = mocno przymknięte.
+  const zZOczu = Math.max(0, Math.min(1, (0.30 - srEar) / (0.30 - 0.15)));
+  const zmeczenie = Math.min(1, 0.75 * zZOczu + 0.45 * udzialZiewania);
+
+  // OBNIŻONY NASTRÓJ: długotrwały brak pozytywnej mimiki + utrzymujący się smutek.
+  // (Tu zmienisz logikę, jeśli chcesz inaczej ważyć sygnały.)
+  const nastroj = Math.max(0, Math.min(1,
+      0.6 * Math.min(1, srSad * 1.5) +
+      0.4 * (1 - Math.min(1, srHappy * 3))
+  ));
+
+  // lekkie dogładzenie, żeby wartości nie skakały
+  zmGladkie      = zmGladkie      * 0.7 + zmeczenie * 0.3;
+  nastrojGladkie = nastrojGladkie * 0.7 + nastroj   * 0.3;
+
+  ustawWskaznik('zmeczenie', zmGladkie);
+  ustawWskaznik('nastroj',   nastrojGladkie);
+}
+
+/* Ustawia pasek i procent jednego wskaźnika (wartosc=null → "—") */
+function ustawWskaznik(klucz, wartosc){
+  const pasek = document.getElementById('wsk-' + klucz + '-pasek');
+  const txt   = document.getElementById('wsk-' + klucz + '-wartosc');
+  if (wartosc === null){
+    pasek.style.width = '0%';
+    txt.textContent = '—';
+    return;
+  }
+  const proc = Math.round(wartosc * 100);
+  pasek.style.width = proc + '%';
+  txt.textContent = proc + '%';
 }
 
 /* ============================================================
